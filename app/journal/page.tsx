@@ -101,6 +101,7 @@ export default function JournalPage() {
             )}
             {filtered.map((entry) => {
               const totalDebit = entry.lines.reduce((s, l) => s + l.debit_amount, 0);
+              const totalCredit = entry.lines.reduce((s, l) => s + l.credit_amount, 0);
               const isExpanded = expanded.has(entry.id);
               return [
                 <TableRow
@@ -117,7 +118,7 @@ export default function JournalPage() {
                     {totalDebit.toLocaleString("ja-JP")}
                   </TableCell>
                   <TableCell className="text-right text-sm tabular-nums">
-                    {totalDebit.toLocaleString("ja-JP")}
+                    {totalCredit.toLocaleString("ja-JP")}
                   </TableCell>
                   <TableCell>
                     <Button

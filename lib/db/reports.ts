@@ -11,6 +11,7 @@ interface AccountBalance {
   total_credit: number;
 }
 
+// サブクエリで先に期間集計してからJOINすることで、日付フィルターが確実に機能する
 async function getBalances(from: string, to: string): Promise<AccountBalance[]> {
   const db = await getDb();
   return db.select<AccountBalance[]>(
@@ -20,14 +21,46 @@ async function getBalances(from: string, to: string): Promise<AccountBalance[]> 
        a.code as account_code,
        a.type as account_type,
        a.subtype as account_subtype,
-       COALESCE(SUM(jl.debit_amount), 0) as total_debit,
-       COALESCE(SUM(jl.credit_amount), 0) as total_credit
+       COALESCE(sums.total_debit, 0) as total_debit,
+       COALESCE(sums.total_credit, 0) as total_credit
      FROM accounts a
-     LEFT JOIN journal_lines jl ON a.id = jl.account_id
-     LEFT JOIN journal_entries je ON jl.entry_id = je.id AND je.date BETWEEN ? AND ?
-     GROUP BY a.id
+     LEFT JOIN (
+       SELECT jl.account_id,
+              SUM(jl.debit_amount)  AS total_debit,
+              SUM(jl.credit_amount) AS total_credit
+       FROM journal_lines jl
+       JOIN journal_entries je ON jl.entry_id = je.id
+       WHERE je.date BETWEEN ? AND ?
+       GROUP BY jl.account_id
+     ) sums ON a.id = sums.account_id
      ORDER BY a.code`,
     [from, to]
+  );
+}
+
+async function getBalancesAsOf(asOf: string): Promise<AccountBalance[]> {
+  const db = await getDb();
+  return db.select<AccountBalance[]>(
+    `SELECT
+       a.id as account_id,
+       a.name as account_name,
+       a.code as account_code,
+       a.type as account_type,
+       a.subtype as account_subtype,
+       COALESCE(sums.total_debit, 0) as total_debit,
+       COALESCE(sums.total_credit, 0) as total_credit
+     FROM accounts a
+     LEFT JOIN (
+       SELECT jl.account_id,
+              SUM(jl.debit_amount)  AS total_debit,
+              SUM(jl.credit_amount) AS total_credit
+       FROM journal_lines jl
+       JOIN journal_entries je ON jl.entry_id = je.id
+       WHERE je.date <= ?
+       GROUP BY jl.account_id
+     ) sums ON a.id = sums.account_id
+     ORDER BY a.code`,
+    [asOf]
   );
 }
 
@@ -91,24 +124,8 @@ export async function getPLReport(from: string, to: string): Promise<PLReport> {
   };
 }
 
-export async function getBSReport(asOf: string): Promise<BSReport> {
-  const db = await getDb();
-  const balances = await db.select<AccountBalance[]>(
-    `SELECT
-       a.id as account_id,
-       a.name as account_name,
-       a.code as account_code,
-       a.type as account_type,
-       a.subtype as account_subtype,
-       COALESCE(SUM(jl.debit_amount), 0) as total_debit,
-       COALESCE(SUM(jl.credit_amount), 0) as total_credit
-     FROM accounts a
-     LEFT JOIN journal_lines jl ON a.id = jl.account_id
-     LEFT JOIN journal_entries je ON jl.entry_id = je.id AND je.date <= ?
-     GROUP BY a.id
-     ORDER BY a.code`,
-    [asOf]
-  );
+export async function getBSReport(asOf: string, fiscalStart: string): Promise<BSReport> {
+  const balances = await getBalancesAsOf(asOf);
 
   const toAssetItem = (b: AccountBalance): BSItem => ({
     account_id: b.account_id,
@@ -144,10 +161,27 @@ export async function getBSReport(asOf: string): Promise<BSReport> {
     .map(toLiabItem)
     .filter((i) => i.amount !== 0);
 
-  const equity = balances
-    .filter((b) => b.account_subtype === "equity")
-    .map(toLiabItem)
-    .filter((i) => i.amount !== 0);
+  // 事業主貸（code:520）は借方残高科目なのでtoAssetItemで計算し資本の控除として扱う
+  const equityBalances = balances.filter((b) => b.account_subtype === "equity");
+  const equity: BSItem[] = equityBalances.map((b) => ({
+    account_id: b.account_id,
+    account_name: b.account_name,
+    account_code: b.account_code,
+    amount: b.account_code === "520"
+      ? -(b.total_debit - b.total_credit) // 事業主貸はマイナス控除
+      : b.total_credit - b.total_debit,
+  })).filter((i) => i.amount !== 0);
+
+  // 当期純利益を資本の部に加算してBS均衡を保つ
+  const plReport = await getPLReport(fiscalStart, asOf);
+  if (plReport.net_profit !== 0) {
+    equity.push({
+      account_id: -1,
+      account_name: "当期純利益",
+      account_code: "---",
+      amount: plReport.net_profit,
+    });
+  }
 
   const total_assets =
     current_assets.reduce((s, i) => s + i.amount, 0) +

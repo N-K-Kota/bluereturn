@@ -149,7 +149,7 @@ export default function AccountsPage() {
             </div>
             <div>
               <Label>種別</Label>
-              <Select value={form.type} onValueChange={(v) => setForm({ ...form, type: v as AccountType, subtype: SUBTYPE_OPTIONS.find((s) => s.type === v)!.value })}>
+              <Select value={form.type} onValueChange={(v) => setForm({ ...form, type: v as AccountType, subtype: SUBTYPE_OPTIONS.find((s) => s.type === v)?.value ?? "selling_expense" })}>
                 <SelectTrigger><SelectValue /></SelectTrigger>
                 <SelectContent>
                   {(Object.keys(TYPE_LABELS) as AccountType[]).map((t) => (

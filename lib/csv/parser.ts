@@ -4,13 +4,12 @@ import type { ImportRule } from "@/types";
 import { matchRule } from "@/lib/db/rules";
 
 export function decodeCSV(buffer: ArrayBuffer): string {
-  // Try UTF-8 first
+  // fatal: true により、無効なUTF-8バイト列（Shift-JIS等）は例外を投げる
   try {
-    const text = new TextDecoder("utf-8", { fatal: true }).decode(buffer);
-    if (!text.includes("")) return text;
-  } catch {}
-  // Fall back to Shift-JIS
-  return new TextDecoder("shift-jis").decode(buffer);
+    return new TextDecoder("utf-8", { fatal: true }).decode(buffer);
+  } catch {
+    return new TextDecoder("shift-jis").decode(buffer);
+  }
 }
 
 export function parseCSVText(text: string): string[][] {

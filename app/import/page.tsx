@@ -1,7 +1,9 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import {
   Select,
   SelectContent,
@@ -18,40 +20,80 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogFooter,
+} from "@/components/ui/dialog";
 import { listAccounts } from "@/lib/db/accounts";
 import { listRules, upsertRule } from "@/lib/db/rules";
 import { bulkCreateJournalEntries } from "@/lib/db/journal";
 import { parseCsvBuffer } from "@/lib/csv/parser";
-import { BANK_FORMATS } from "@/lib/csv/formats";
 import type { Account, CsvTransaction, ImportRule } from "@/types";
 import { Upload, CheckCircle2 } from "lucide-react";
+
+const CARD_FORMAT_IDS = ["rakuten_card", "smbc_card"];
 
 interface RowState extends CsvTransaction {
   selected: boolean;
   account_id: string;
-  // for rule learning
-  originalAccountId?: number;
+}
+
+interface RuleLearnItem {
+  description: string;
+  keyword: string;
+  account_id: string;
+  entry_type: "debit" | "credit";
 }
 
 export default function ImportPage() {
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [rules, setRules] = useState<ImportRule[]>([]);
   const [rows, setRows] = useState<RowState[]>([]);
-  const [detectedFormat, setDetectedFormat] = useState<string | null>(null);
+  const [detectedFormatId, setDetectedFormatId] = useState<string | null>(null);
+  const [detectedFormatName, setDetectedFormatName] = useState<string | null>(null);
+  const [counterAccountId, setCounterAccountId] = useState("");
   const [imported, setImported] = useState(false);
+  const [learnItems, setLearnItems] = useState<RuleLearnItem[]>([]);
+  const [showLearnDialog, setShowLearnDialog] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
 
+  async function loadRules() {
+    const r = await listRules();
+    setRules(r);
+    return r;
+  }
+
   useEffect(() => {
-    listAccounts().then(setAccounts);
-    listRules().then(setRules);
+    listAccounts().then((accs) => {
+      setAccounts(accs);
+      const bank = accs.find((a) => a.name === "普通預金");
+      if (bank) setCounterAccountId(String(bank.id));
+    });
+    loadRules();
   }, []);
 
   async function handleFile(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
     if (!file) return;
     const buffer = await file.arrayBuffer();
-    const result = await parseCsvBuffer(buffer, rules);
-    setDetectedFormat(result.format?.name ?? "不明（汎用パーサー）");
+    const latestRules = await loadRules();
+    const result = await parseCsvBuffer(buffer, latestRules);
+    const fmtId = result.format?.id ?? null;
+    setDetectedFormatId(fmtId);
+    setDetectedFormatName(result.format?.name ?? "不明（汎用パーサー）");
+
+    // クレジットカードのCSVはデフォルトで未払金をカウンター勘定にする
+    if (fmtId && CARD_FORMAT_IDS.includes(fmtId)) {
+      const unpaid = accounts.find((a) => a.name === "未払金");
+      if (unpaid) setCounterAccountId(String(unpaid.id));
+    } else {
+      const bank = accounts.find((a) => a.name === "普通預金");
+      if (bank) setCounterAccountId(String(bank.id));
+    }
+
     setRows(
       result.transactions.map((t) => ({
         ...t,
@@ -67,22 +109,35 @@ export default function ImportPage() {
     setRows((prev) => prev.map((r, idx) => (idx === i ? { ...r, ...field } : r)));
   }
 
-  async function handleImport() {
+  function handleConfirmImport() {
     const selected = rows.filter((r) => r.selected && r.account_id);
+    // ルール未マッチの行についてルール学習候補を作成
+    const newItems: RuleLearnItem[] = selected
+      .filter((r) => !r.rule_matched)
+      .map((r) => ({
+        description: r.description,
+        // キーワードは摘要の先頭20文字を提案
+        keyword: r.description.slice(0, 20),
+        account_id: r.account_id,
+        entry_type: r.type,
+      }));
+    if (newItems.length > 0) {
+      setLearnItems(newItems);
+      setShowLearnDialog(true);
+    } else {
+      doImport(selected, []);
+    }
+  }
 
-    // Learn rules for newly assigned accounts
-    for (const row of selected) {
-      if (row.account_id && !row.rule_matched) {
-        await upsertRule(
-          row.description,
-          parseInt(row.account_id),
-          row.type
-        );
+  async function doImport(selected: RowState[], learnList: RuleLearnItem[]) {
+    const counterIdNum = parseInt(counterAccountId);
+    if (!counterIdNum) return;
+
+    for (const item of learnList) {
+      if (item.keyword.trim()) {
+        await upsertRule(item.keyword.trim(), parseInt(item.account_id), item.entry_type);
       }
     }
-
-    // Determine counter account (cash/bank) — use 普通預金 by default
-    const bankAccount = accounts.find((a) => a.name === "普通預金") ?? accounts[0];
 
     await bulkCreateJournalEntries(
       selected.map((row) => {
@@ -93,13 +148,13 @@ export default function ImportPage() {
           description: row.description,
           lines: [
             {
-              account_id: isDebit ? accountId : bankAccount.id,
+              account_id: isDebit ? accountId : counterIdNum,
               debit_amount: row.amount,
               credit_amount: 0,
               description: "",
             },
             {
-              account_id: isDebit ? bankAccount.id : accountId,
+              account_id: isDebit ? counterIdNum : accountId,
               debit_amount: 0,
               credit_amount: row.amount,
               description: "",
@@ -109,8 +164,10 @@ export default function ImportPage() {
       })
     );
 
+    await loadRules();
     setImported(true);
     setRows([]);
+    setShowLearnDialog(false);
   }
 
   const selectedCount = rows.filter((r) => r.selected && r.account_id).length;
@@ -139,9 +196,9 @@ export default function ImportPage() {
         />
       </div>
 
-      {detectedFormat && (
+      {detectedFormatName && (
         <p className="text-sm mb-3">
-          検出フォーマット: <Badge variant="secondary">{detectedFormat}</Badge>
+          検出フォーマット: <Badge variant="secondary">{detectedFormatName}</Badge>
         </p>
       )}
 
@@ -154,6 +211,25 @@ export default function ImportPage() {
 
       {rows.length > 0 && (
         <>
+          <div className="flex items-center gap-3 mb-3">
+            <Label className="text-sm shrink-0">カウンター勘定</Label>
+            <Select value={counterAccountId} onValueChange={(v) => setCounterAccountId(v ?? "")}>
+              <SelectTrigger className="w-48">
+                <SelectValue placeholder="選択" />
+              </SelectTrigger>
+              <SelectContent>
+                {accounts.map((a) => (
+                  <SelectItem key={a.id} value={String(a.id)} className="text-xs">
+                    {a.code} {a.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <span className="text-xs text-muted-foreground">
+              銀行明細→普通預金、カード明細→未払金
+            </span>
+          </div>
+
           <div className="rounded-md border mb-4 max-h-[50vh] overflow-y-auto">
             <Table>
               <TableHeader>
@@ -169,7 +245,7 @@ export default function ImportPage() {
                   </TableHead>
                   <TableHead className="w-28">日付</TableHead>
                   <TableHead>摘要</TableHead>
-                  <TableHead className="w-20 text-right">金額</TableHead>
+                  <TableHead className="w-24 text-right">金額</TableHead>
                   <TableHead className="w-16">種別</TableHead>
                   <TableHead className="w-48">勘定科目</TableHead>
                 </TableRow>
@@ -222,11 +298,50 @@ export default function ImportPage() {
             </Table>
           </div>
 
-          <Button onClick={handleImport} disabled={selectedCount === 0}>
+          <Button onClick={handleConfirmImport} disabled={selectedCount === 0 || !counterAccountId}>
             {selectedCount} 件をインポート
           </Button>
         </>
       )}
+
+      {/* ルール学習ダイアログ */}
+      <Dialog open={showLearnDialog} onOpenChange={setShowLearnDialog}>
+        <DialogContent className="max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>ルールを保存しますか？</DialogTitle>
+          </DialogHeader>
+          <p className="text-sm text-muted-foreground mb-3">
+            次回同じキーワードが含まれる取引を自動分類します。不要な行は空欄にしてください。
+          </p>
+          <div className="space-y-2 max-h-64 overflow-y-auto">
+            {learnItems.map((item, i) => (
+              <div key={i} className="flex items-center gap-2">
+                <Input
+                  className="flex-1 text-xs h-7"
+                  value={item.keyword}
+                  onChange={(e) =>
+                    setLearnItems((prev) =>
+                      prev.map((it, idx) => idx === i ? { ...it, keyword: e.target.value } : it)
+                    )
+                  }
+                  placeholder="キーワード"
+                />
+                <span className="text-xs text-muted-foreground shrink-0 w-32 truncate">
+                  → {accounts.find((a) => a.id === parseInt(item.account_id))?.name}
+                </span>
+              </div>
+            ))}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => doImport(rows.filter((r) => r.selected && r.account_id), [])}>
+              保存しない
+            </Button>
+            <Button onClick={() => doImport(rows.filter((r) => r.selected && r.account_id), learnItems)}>
+              保存してインポート
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

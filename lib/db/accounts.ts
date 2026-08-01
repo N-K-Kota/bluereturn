@@ -16,16 +16,20 @@ export async function createAccount(
   );
 }
 
+const ALLOWED_ACCOUNT_FIELDS = ["code", "name", "type", "subtype"] as const;
+
 export async function updateAccount(
   id: number,
   data: Partial<Omit<Account, "id" | "is_system">>
 ): Promise<void> {
   const db = await getDb();
-  const fields = Object.keys(data)
-    .map((k) => `${k} = ?`)
-    .join(", ");
+  const entries = Object.entries(data).filter(([k]) =>
+    ALLOWED_ACCOUNT_FIELDS.includes(k as (typeof ALLOWED_ACCOUNT_FIELDS)[number])
+  );
+  if (entries.length === 0) return;
+  const fields = entries.map(([k]) => `${k} = ?`).join(", ");
   await db.execute(`UPDATE accounts SET ${fields} WHERE id = ?`, [
-    ...Object.values(data),
+    ...entries.map(([, v]) => v),
     id,
   ]);
 }

@@ -1,15 +1,19 @@
 import Database from "@tauri-apps/plugin-sql";
 
-let _db: Database | null = null;
+let _dbPromise: Promise<Database> | null = null;
 
-export async function getDb(): Promise<Database> {
-  if (_db) return _db;
-  _db = await Database.load("sqlite:aoshoku.db");
-  await initSchema(_db);
-  return _db;
+export function getDb(): Promise<Database> {
+  if (!_dbPromise) {
+    _dbPromise = Database.load("sqlite:aoshoku.db").then(async (db) => {
+      await initSchema(db);
+      return db;
+    });
+  }
+  return _dbPromise;
 }
 
 async function initSchema(db: Database) {
+  await db.execute("PRAGMA foreign_keys = ON");
   await db.execute(`
     CREATE TABLE IF NOT EXISTS accounts (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
