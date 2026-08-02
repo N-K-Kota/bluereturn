@@ -50,12 +50,15 @@ export async function parseCsvBuffer(
   const text = decodeCSV(buffer);
   const rows = parseCSVText(text);
 
-  // Find header row (first row that looks like headers)
+  // 全フォーマットの既知ヘッダー一覧を使い、最もマッチ数が多い行をヘッダー行とする
+  const knownHeaders = new Set(BANK_FORMATS.flatMap((f) => f.headers));
   let headerRowIndex = 0;
-  for (let i = 0; i < Math.min(5, rows.length); i++) {
-    if (rows[i].some((c) => /日|摘要|金額|利用/.test(c))) {
+  let bestScore = -1;
+  for (let i = 0; i < Math.min(20, rows.length); i++) {
+    const score = rows[i].filter((c) => knownHeaders.has(c)).length;
+    if (score > bestScore) {
+      bestScore = score;
       headerRowIndex = i;
-      break;
     }
   }
 

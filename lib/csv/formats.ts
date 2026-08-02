@@ -39,12 +39,12 @@ export const BANK_FORMATS: BankFormat[] = [
   {
     id: "mizuho",
     name: "みずほ銀行",
-    headers: ["年月日", "摘要", "お支払金額", "お預り金額", "差引残高"],
+    headers: ["明細通番", "日付", "お引出金額", "お預入金額", "残高", "お取引内容"],
     parse: (row) => ({
-      date: parseDate(row["年月日"]),
-      description: row["摘要"] || "",
-      debit: parseAmount(row["お支払金額"]),
-      credit: parseAmount(row["お預り金額"]),
+      date: parseDate(row["日付"]),
+      description: row["お取引内容"] || "",
+      debit: parseAmount(row["お引出金額"]),
+      credit: parseAmount(row["お預入金額"]),
     }),
   },
   {
