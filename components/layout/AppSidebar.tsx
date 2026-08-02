@@ -9,6 +9,7 @@ import {
   Settings,
   LayoutDashboard,
   Tags,
+  Library,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -17,6 +18,7 @@ const nav = [
   { href: "/journal", label: "仕訳帳", icon: BookOpen },
   { href: "/accounts", label: "勘定科目", icon: Tags },
   { href: "/import", label: "CSVインポート", icon: Upload },
+  { href: "/dictionary", label: "辞書", icon: Library },
   { href: "/reports/pl", label: "損益計算書", icon: BarChart3 },
   { href: "/reports/bs", label: "貸借対照表", icon: BarChart3 },
   { href: "/settings", label: "設定", icon: Settings },
