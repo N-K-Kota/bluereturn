@@ -1,3 +1,5 @@
+import { invoke } from "@tauri-apps/api/core";
+import { validateJournalEntry } from "@/lib/validation";
 import { getDb } from "./index";
 import type { JournalEntry, JournalEntryWithLines, JournalLine } from "@/types";
 
@@ -23,16 +25,14 @@ export async function listJournalEntries(
   const entries = await db.select<JournalEntry[]>(query, params);
   if (entries.length === 0) return [];
 
-  // N+1を避けるため全明細を一括取得してグループ化
-  const ids = entries.map((e) => e.id);
-  const placeholders = ids.map(() => "?").join(",");
+  // Reuse the date filter instead of an unbounded IN list (SQLite has a bind limit).
   const allLines = await db.select<JournalLine[]>(
     `SELECT jl.*, a.name as account_name, a.code as account_code
      FROM journal_lines jl
      JOIN accounts a ON jl.account_id = a.id
-     WHERE jl.entry_id IN (${placeholders})
+     JOIN (${query}) je ON jl.entry_id = je.id
      ORDER BY jl.entry_id, jl.id`,
-    ids
+    params
   );
 
   const linesByEntry = new Map<number, JournalLine[]>();
@@ -71,31 +71,7 @@ export interface CreateJournalEntryInput {
 export async function createJournalEntry(
   input: CreateJournalEntryInput
 ): Promise<void> {
-  const totalDebit = input.lines.reduce((s, l) => s + l.debit_amount, 0);
-  const totalCredit = input.lines.reduce((s, l) => s + l.credit_amount, 0);
-  if (Math.abs(totalDebit - totalCredit) > 0.01) {
-    throw new Error("借方合計と貸方合計が一致しません");
-  }
-
-  const db = await getDb();
-  await db.execute("BEGIN");
-  try {
-    const result = await db.execute(
-      "INSERT INTO journal_entries (date, description) VALUES (?, ?)",
-      [input.date, input.description]
-    );
-    const entryId = result.lastInsertId;
-    for (const line of input.lines) {
-      await db.execute(
-        "INSERT INTO journal_lines (entry_id, account_id, debit_amount, credit_amount, description) VALUES (?, ?, ?, ?, ?)",
-        [entryId, line.account_id, line.debit_amount, line.credit_amount, line.description]
-      );
-    }
-    await db.execute("COMMIT");
-  } catch (e) {
-    await db.execute("ROLLBACK");
-    throw e;
-  }
+  await bulkCreateJournalEntries([input]);
 }
 
 export async function deleteJournalEntry(id: number): Promise<void> {
@@ -103,33 +79,18 @@ export async function deleteJournalEntry(id: number): Promise<void> {
   await db.execute("DELETE FROM journal_entries WHERE id = ?", [id]);
 }
 
+export interface ImportRuleInput {
+  keyword: string;
+  account_id: number;
+  entry_type: "debit" | "credit";
+}
+
 export async function bulkCreateJournalEntries(
-  entries: CreateJournalEntryInput[]
+  entries: CreateJournalEntryInput[],
+  rules: ImportRuleInput[] = []
 ): Promise<void> {
-  const db = await getDb();
-  await db.execute("BEGIN");
-  try {
-    for (const entry of entries) {
-      const totalDebit = entry.lines.reduce((s, l) => s + l.debit_amount, 0);
-      const totalCredit = entry.lines.reduce((s, l) => s + l.credit_amount, 0);
-      if (Math.abs(totalDebit - totalCredit) > 0.01) {
-        throw new Error(`借貸不一致: ${entry.description}`);
-      }
-      const result = await db.execute(
-        "INSERT INTO journal_entries (date, description) VALUES (?, ?)",
-        [entry.date, entry.description]
-      );
-      const entryId = result.lastInsertId;
-      for (const line of entry.lines) {
-        await db.execute(
-          "INSERT INTO journal_lines (entry_id, account_id, debit_amount, credit_amount, description) VALUES (?, ?, ?, ?, ?)",
-          [entryId, line.account_id, line.debit_amount, line.credit_amount, line.description]
-        );
-      }
-    }
-    await db.execute("COMMIT");
-  } catch (e) {
-    await db.execute("ROLLBACK");
-    throw e;
-  }
+  if (!entries.length) throw new Error("保存する仕訳がありません");
+  entries.forEach(validateJournalEntry);
+  await getDb();
+  await invoke("save_journal_entries", { entries, rules });
 }

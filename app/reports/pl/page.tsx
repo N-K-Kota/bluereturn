@@ -1,6 +1,8 @@
 "use client";
+import { useAsyncData } from "@/hooks/use-async-data";
+import { LoadStatus } from "@/components/LoadStatus";
 
-import { useEffect, useState } from "react";
+import { useCallback, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -11,9 +13,8 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { Separator } from "@/components/ui/separator";
 import { getPLReport } from "@/lib/db/reports";
-import type { PLReport, PLItem } from "@/types";
+import type { PLItem } from "@/types";
 
 function fmt(n: number) {
   return n.toLocaleString("ja-JP") + " 円";
@@ -52,14 +53,11 @@ export default function PLPage() {
   const year = new Date().getFullYear();
   const [from, setFrom] = useState(`${year}-01-01`);
   const [to, setTo] = useState(`${year}-12-31`);
-  const [report, setReport] = useState<PLReport | null>(null);
+  const [range, setRange] = useState({ from, to });
+  const loader = useCallback(() => getPLReport(range.from, range.to), [range]);
+  const { data: report, loading, error, reload } = useAsyncData(loader);
+  function load() { setRange({ from, to }); }
 
-  async function load() {
-    const data = await getPLReport(from, to);
-    setReport(data);
-  }
-
-  useEffect(() => { load(); }, []);
 
   return (
     <div className="p-6 max-w-2xl">
@@ -73,6 +71,7 @@ export default function PLPage() {
         </div>
       </div>
 
+      <LoadStatus loading={loading} error={error} retry={reload} />
       {report && (
         <div className="rounded-md border">
           <Table>

@@ -1,36 +1,57 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# 青色申告（BlueReturn）
 
-## Getting Started
+個人事業向けのローカル会計アプリです。Tauri 2、Next.js 16、React 19、SQLiteを使い、仕訳・CSV取り込み・損益計算書・貸借対照表・申告用の参考計算を提供します。
 
-First, run the development server:
+## 起動
 
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+Node.jsとRust、Tauriの開発環境が必要です。依存パッケージのエンジン要件に合わせてNode.js 22.13以降を使用してください。
+
+```sh
+npm ci
+npm run tauri -- dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+デスクトップアプリと開発サーバーが起動します。データはTauriのアプリ設定ディレクトリ内の `aoshoku.db` に保存されます。通常のブラウザではSQLiteへのアクセスができないため、会計機能の確認にはデスクトップアプリを使ってください。
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## 確認コマンド
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+```sh
+npm test
+npm run typecheck
+npm run lint
+npm run build
+cargo test --manifest-path src-tauri/Cargo.toml --lib
+```
 
-## Learn More
+`npm run build` は静的ファイルを `out/` に生成します。フォントはOSの標準フォントを使い、ビルド時に外部フォントを取得しません。`npm run tauri -- build` でデスクトップ版をビルドできます。`output: "export"` のため、`next start` での配信は使いません。
 
-To learn more about Next.js, take a look at the following resources:
+## 操作の流れ
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+1. **勘定科目・辞書**：必要な科目やCSVの自動分類ルールを登録。
+2. **仕訳帳・CSVインポート**：取引を入力。CSVはプレビューで科目と入出金を確認して保存。
+3. **損益計算書・貸借対照表**：期間を指定して集計。
+4. **設定**：2024年分または2025年分の納税者情報を保存。
+5. **確定申告**：帳簿から事業所得を読み込み、給与・雑所得・控除・源泉徴収税額・予定納税額を入力して計算・保存。
+6. **入力ガイド・印刷**：保存済み入力と現在の帳簿・設定から同じ計算処理で結果を表示。
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+## 計算の範囲
 
-## Deploy on Vercel
+2024・2025年分の居住者の事業所得、給与所得、一般の雑所得を対象とした参考計算です。2025年の基礎控除・給与所得控除、2024年の定額減税に対応します。定額減税の対象人数は本人を含めて入力してください（既存データの初期値は0人）。
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+住宅ローン・寄附金・小規模企業共済等掛金・特定親族特別控除、老人配偶者、所得金額調整控除、公的年金、分離課税、損失繰越などは対象外です。棚卸・減価償却・家事按分は決算整理仕訳に反映してください。
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+消費税は標準税率10%のみ、一般課税は全額仕入税額控除できる取引、簡易課税は単一事業区分の参考計算です。軽減税率、非適格請求書の経過措置、課税売上割合、中間納付等には対応していません。一般課税・2割特例の売上は税抜、簡易課税は税込で入力します。既存データもこの入力単位を維持します。
+
+印刷シートは提出用の申告書ではありません。該当する追加項目は国税庁の確定申告書等作成コーナーで入力・確認してください。
+
+## 設計
+
+- `lib/accounting/`：帳簿の集計。DBに依存しない純粋な計算。
+- `lib/tax/`：年度別の税額計算、入力検証、共通の計算入口。
+- `lib/db/`：SQLによる読み書きと、既存DBを保持する追加マイグレーション。
+- `src-tauri/src/journal.rs`：仕訳とCSV辞書ルールを単一接続のトランザクションで保存。失敗時は全件ロールバック。
+- `lib/csv/`：文字コード、CSVの構文、銀行形式、入出金別ルール照合。
+- `hooks/use-async-data.ts`：読み込み・失敗・再試行・古いリクエストの破棄。
+- `hooks/use-async-action.ts`：保存の多重実行防止と失敗通知。
+
+修正の理由・検証範囲・参照資料は [設計レビュー](docs/design-review.md) を参照してください。

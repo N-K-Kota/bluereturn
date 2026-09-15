@@ -1,7 +1,8 @@
-import { detectFormat, BANK_FORMATS, type BankFormat } from "./formats";
+import { normalizeDate } from "../validation";
+import { detectFormat, BANK_FORMATS, parseAmount, type BankFormat } from "./formats";
 import type { CsvTransaction, CsvMapping } from "@/types";
 import type { ImportRule } from "@/types";
-import { matchRule } from "@/lib/db/rules";
+import { matchRule } from "./rules";
 
 export function decodeCSV(buffer: ArrayBuffer): string {
   // fatal: true により、無効なUTF-8バイト列（Shift-JIS等）は例外を投げる
@@ -13,27 +14,29 @@ export function decodeCSV(buffer: ArrayBuffer): string {
 }
 
 export function parseCSVText(text: string): string[][] {
-  const lines = text.replace(/\r\n/g, "\n").replace(/\r/g, "\n").split("\n");
-  return lines
-    .filter((l) => l.trim() !== "")
-    .map((line) => {
-      const cells: string[] = [];
-      let cur = "";
-      let inQuote = false;
-      for (let i = 0; i < line.length; i++) {
-        const c = line[i];
-        if (c === '"') {
-          if (inQuote && line[i + 1] === '"') { cur += '"'; i++; }
-          else inQuote = !inQuote;
-        } else if (c === "," && !inQuote) {
-          cells.push(cur.trim()); cur = "";
-        } else {
-          cur += c;
-        }
-      }
-      cells.push(cur.trim());
-      return cells;
-    });
+  const source = text.replace(/^\uFEFF/, "").replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+  const rows: string[][] = [];
+  let row: string[] = [], cell = "", quoted = false, closed = false;
+  const pushCell = () => { row.push(cell.trim()); cell = ""; closed = false; };
+  const pushRow = () => { pushCell(); if (row.some(Boolean)) rows.push(row); row = []; };
+  for (let i = 0; i < source.length; i++) {
+    const char = source[i];
+    if (quoted) {
+      if (char === '"') {
+        if (source[i + 1] === '"') { cell += '"'; i++; }
+        else { quoted = false; closed = true; }
+      } else cell += char;
+    } else if (char === ",") pushCell();
+    else if (char === "\n") pushRow();
+    else if (char === '"' && !cell.trim() && !closed) { cell = ""; quoted = true; }
+    else {
+      if (char === '"' || (closed && char.trim())) throw new Error("CSVの引用符が正しくありません");
+      cell += char;
+    }
+  }
+  if (quoted) throw new Error("CSVの引用符が閉じられていません");
+  pushRow();
+  return rows;
 }
 
 export interface ParseResult {
@@ -49,6 +52,7 @@ export async function parseCsvBuffer(
 ): Promise<ParseResult> {
   const text = decodeCSV(buffer);
   const rows = parseCSVText(text);
+  if (!rows.length) throw new Error("CSVファイルが空です");
 
   // 全フォーマットの既知ヘッダー一覧を使い、最もマッチ数が多い行をヘッダー行とする
   const knownHeaders = new Set(BANK_FORMATS.flatMap((f) => f.headers));
@@ -66,6 +70,7 @@ export async function parseCsvBuffer(
   const dataRows = rows.slice(headerRowIndex + 1);
   const format = customMapping ? null : detectFormat(headers);
 
+  if (!format && !customMapping) throw new Error("対応するCSV形式を検出できませんでした。銀行の入出金明細CSVを選択してください。");
   const transactions: CsvTransaction[] = [];
 
   for (const row of dataRows) {
@@ -87,12 +92,12 @@ export async function parseCsvBuffer(
       date = rowObj[customMapping.date] ?? "";
       description = rowObj[customMapping.description] ?? "";
       if (customMapping.amount) {
-        const amount = parseFloat((rowObj[customMapping.amount] ?? "").replace(/,/g, "")) || 0;
+        const amount = parseAmount(rowObj[customMapping.amount] ?? "");
         if (amount >= 0) credit = amount;
         else debit = -amount;
       } else {
-        debit = parseFloat((rowObj[customMapping.debit_amount ?? ""] ?? "").replace(/,/g, "")) || 0;
-        credit = parseFloat((rowObj[customMapping.credit_amount ?? ""] ?? "").replace(/,/g, "")) || 0;
+        debit = parseAmount(rowObj[customMapping.debit_amount ?? ""] ?? "");
+        credit = parseAmount(rowObj[customMapping.credit_amount ?? ""] ?? "");
       }
     } else {
       continue;
@@ -100,8 +105,14 @@ export async function parseCsvBuffer(
 
     if (!date || (debit === 0 && credit === 0)) continue;
 
+    date = normalizeDate(date);
+    if (debit < 0 && credit === 0) { credit = -debit; debit = 0; }
+    else if (credit < 0 && debit === 0) { debit = -credit; credit = 0; }
+    if (debit < 0 || credit < 0 || (debit > 0 && credit > 0)) {
+      throw new Error(`${date}: 入金・出金の両方に金額がある行は取り込めません`);
+    }
     const type = debit > 0 ? "debit" : "credit";
-    const rule = await matchRule(description, rules);
+    const rule = matchRule(description, rules, type);
 
     transactions.push({
       date,

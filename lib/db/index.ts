@@ -1,12 +1,17 @@
 import Database from "@tauri-apps/plugin-sql";
+import { isTauri } from "@tauri-apps/api/core";
 
 let _dbPromise: Promise<Database> | null = null;
 
 export function getDb(): Promise<Database> {
+  if (!isTauri()) return Promise.reject(new Error("データの表示・保存はデスクトップ版で利用できます。青色申告アプリを起動してください。"));
   if (!_dbPromise) {
     _dbPromise = Database.load("sqlite:aoshoku.db").then(async (db) => {
       await initSchema(db);
       return db;
+    }).catch((error) => {
+      _dbPromise = null;
+      throw error;
     });
   }
   return _dbPromise;
@@ -61,15 +66,79 @@ async function initSchema(db: Database) {
     )
   `);
 
+  await db.execute(`
+    CREATE TABLE IF NOT EXISTS tax_profiles (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      fiscal_year TEXT NOT NULL,
+      name TEXT NOT NULL DEFAULT '',
+      name_kana TEXT NOT NULL DEFAULT '',
+      address TEXT NOT NULL DEFAULT '',
+      address_kana TEXT NOT NULL DEFAULT '',
+      birthday TEXT NOT NULL DEFAULT '',
+      phone TEXT NOT NULL DEFAULT '',
+      business_type TEXT NOT NULL DEFAULT '',
+      my_number TEXT NOT NULL DEFAULT '',
+      consumption_tax_type TEXT NOT NULL DEFAULT 'exempt'
+        CHECK(consumption_tax_type IN ('exempt','general','simplified')),
+      simplified_tax_industry TEXT NOT NULL DEFAULT '5',
+      blue_deduction TEXT NOT NULL DEFAULT '650000',
+      UNIQUE(fiscal_year)
+    )
+  `);
+
+  await db.execute(`
+    CREATE TABLE IF NOT EXISTS tax_returns (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      fiscal_year TEXT NOT NULL,
+      profile_id INTEGER NOT NULL REFERENCES tax_profiles(id),
+      salary_income REAL NOT NULL DEFAULT 0,
+      salary_withheld REAL NOT NULL DEFAULT 0,
+      misc_income REAL NOT NULL DEFAULT 0,
+      misc_expenses REAL NOT NULL DEFAULT 0,
+      social_insurance REAL NOT NULL DEFAULT 0,
+      life_insurance_old REAL NOT NULL DEFAULT 0,
+      life_insurance_new REAL NOT NULL DEFAULT 0,
+      pension_insurance_old REAL NOT NULL DEFAULT 0,
+      pension_insurance_new REAL NOT NULL DEFAULT 0,
+      earthquake_insurance REAL NOT NULL DEFAULT 0,
+      long_term_earthquake REAL NOT NULL DEFAULT 0,
+      medical_expenses REAL NOT NULL DEFAULT 0,
+      disabled_type INTEGER NOT NULL DEFAULT 0,
+      widow_type INTEGER NOT NULL DEFAULT 0,
+      working_student INTEGER NOT NULL DEFAULT 0,
+      spouse_income REAL NOT NULL DEFAULT -1,
+      dependent_general INTEGER NOT NULL DEFAULT 0,
+      dependent_specific INTEGER NOT NULL DEFAULT 0,
+      dependent_elderly_parent INTEGER NOT NULL DEFAULT 0,
+      dependent_elderly_other INTEGER NOT NULL DEFAULT 0,
+      taxable_sales REAL NOT NULL DEFAULT 0,
+      taxable_purchases REAL NOT NULL DEFAULT 0,
+      care_insurance_new REAL NOT NULL DEFAULT 0,
+      UNIQUE(fiscal_year)
+    )
+  `);
+  // Inspect columns so genuine migration failures are surfaced and can be retried.
+  for (const [table, column, definition] of [
+    ["tax_returns", "taxable_purchases", "REAL NOT NULL DEFAULT 0"],
+    ["tax_returns", "care_insurance_new", "REAL NOT NULL DEFAULT 0"],
+    ["tax_returns", "fixed_tax_reduction_people", "INTEGER NOT NULL DEFAULT 0"],
+    ["tax_returns", "business_withheld", "INTEGER NOT NULL DEFAULT 0"],
+    ["tax_returns", "prepaid_tax", "INTEGER NOT NULL DEFAULT 0"],
+    ["tax_profiles", "consumption_tax_two_tenth", "INTEGER NOT NULL DEFAULT 0"],
+  ]) {
+    const columns = await db.select<{ name: string }[]>(`PRAGMA table_info(${table})`);
+    if (!columns.some((c) => c.name === column)) {
+      await db.execute(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+    }
+  }
+  await db.execute("CREATE INDEX IF NOT EXISTS journal_entries_date_idx ON journal_entries(date)");
+  await db.execute("CREATE INDEX IF NOT EXISTS journal_lines_entry_idx ON journal_lines(entry_id)");
+  await db.execute("CREATE INDEX IF NOT EXISTS journal_lines_account_idx ON journal_lines(account_id)");
+
   await seedDefaultAccounts(db);
 }
 
 async function seedDefaultAccounts(db: Database) {
-  const result = await db.select<{ count: number }[]>(
-    "SELECT COUNT(*) as count FROM accounts WHERE is_system = 1"
-  );
-  if (result[0].count > 0) return;
-
   const defaults = [
     // 資産
     ["101", "現金", "asset", "current_asset"],

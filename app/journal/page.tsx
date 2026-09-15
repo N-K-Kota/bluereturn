@@ -1,6 +1,9 @@
 "use client";
+import { useAsyncData } from "@/hooks/use-async-data";
+import { useAsyncAction } from "@/hooks/use-async-action";
+import { LoadStatus } from "@/components/LoadStatus";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -20,7 +23,7 @@ import {
   DialogFooter,
 } from "@/components/ui/dialog";
 import { listJournalEntries, deleteJournalEntry } from "@/lib/db/journal";
-import type { JournalEntryWithLines } from "@/types";
+
 import { Plus, Trash2, ChevronDown, ChevronRight } from "lucide-react";
 
 function fmt(n: number) {
@@ -28,17 +31,13 @@ function fmt(n: number) {
 }
 
 export default function JournalPage() {
-  const [entries, setEntries] = useState<JournalEntryWithLines[]>([]);
+  const { data, loading, error, reload: load } = useAsyncData(listJournalEntries);
+  const entries = data ?? [];
+  const { run, pending } = useAsyncAction();
   const [expanded, setExpanded] = useState<Set<number>>(new Set());
   const [search, setSearch] = useState("");
   const [deleteId, setDeleteId] = useState<number | null>(null);
 
-  async function load() {
-    const data = await listJournalEntries();
-    setEntries(data);
-  }
-
-  useEffect(() => { load(); }, []);
 
   const filtered = entries.filter(
     (e) =>
@@ -50,20 +49,24 @@ export default function JournalPage() {
   function toggleExpand(id: number) {
     setExpanded((prev) => {
       const next = new Set(prev);
-      next.has(id) ? next.delete(id) : next.add(id);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
       return next;
     });
   }
 
   async function handleDelete() {
+    await run(async () => {
     if (deleteId == null) return;
     await deleteJournalEntry(deleteId);
     setDeleteId(null);
     load();
+    });
   }
 
   return (
     <div className="p-6">
+      <LoadStatus loading={loading} error={error} retry={load} />
       <div className="flex items-center justify-between mb-4">
         <h2 className="text-xl font-semibold">仕訳帳</h2>
         <Link href="/journal/new">
@@ -92,7 +95,7 @@ export default function JournalPage() {
             </TableRow>
           </TableHeader>
           <TableBody>
-            {filtered.length === 0 && (
+            {!loading && !error && filtered.length === 0 && (
               <TableRow>
                 <TableCell colSpan={6} className="text-center text-muted-foreground py-8">
                   仕訳がありません
@@ -164,7 +167,7 @@ export default function JournalPage() {
           <p className="text-sm text-muted-foreground">この操作は取り消せません。</p>
           <DialogFooter>
             <Button variant="outline" onClick={() => setDeleteId(null)}>キャンセル</Button>
-            <Button variant="destructive" onClick={handleDelete}>削除</Button>
+            <Button variant="destructive" onClick={handleDelete} disabled={pending}>削除</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

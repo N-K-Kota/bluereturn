@@ -1,4 +1,6 @@
 "use client";
+import { useAsyncAction } from "@/hooks/use-async-action";
+import { errorMessage } from "@/lib/validation";
 
 import { useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
@@ -21,10 +23,10 @@ import {
 } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { listAccounts } from "@/lib/db/accounts";
-import { listRules, upsertRule } from "@/lib/db/rules";
+import { listRules } from "@/lib/db/rules";
 import { bulkCreateJournalEntries } from "@/lib/db/journal";
 import { parseCsvBuffer } from "@/lib/csv/parser";
-import type { Account, CsvTransaction, ImportRule } from "@/types";
+import type { Account, CsvTransaction } from "@/types";
 import { Upload, CheckCircle2, BookOpen } from "lucide-react";
 import Link from "next/link";
 
@@ -45,9 +47,9 @@ function suggestKeyword(description: string): string {
 
 export default function ImportPage() {
   const [accounts, setAccounts] = useState<Account[]>([]);
-  const [rules, setRules] = useState<ImportRule[]>([]);
+  const { run, pending } = useAsyncAction();
+  const [loadError, setLoadError] = useState("");
   const [rows, setRows] = useState<RowState[]>([]);
-  const [detectedFormatId, setDetectedFormatId] = useState<string | null>(null);
   const [detectedFormatName, setDetectedFormatName] = useState<string | null>(null);
   const [counterAccountId, setCounterAccountId] = useState("");
   const [imported, setImported] = useState(false);
@@ -55,29 +57,25 @@ export default function ImportPage() {
   const [newRuleCount, setNewRuleCount] = useState(0);
   const fileRef = useRef<HTMLInputElement>(null);
 
-  async function loadRules() {
-    const r = await listRules();
-    setRules(r);
-    return r;
-  }
-
   useEffect(() => {
     listAccounts().then((accs) => {
       setAccounts(accs);
       const bank = accs.find((a) => a.name === "普通預金");
       if (bank) setCounterAccountId(String(bank.id));
-    });
-    loadRules();
+    }).catch((error) => setLoadError(errorMessage(error)));
   }, []);
 
   async function handleFile(e: React.ChangeEvent<HTMLInputElement>) {
+    await run(async () => {
     const file = e.target.files?.[0];
     if (!file) return;
+    setRows([]);
+    setDetectedFormatName(null);
+    setImported(false);
     const buffer = await file.arrayBuffer();
-    const latestRules = await loadRules();
+    const latestRules = await listRules();
     const result = await parseCsvBuffer(buffer, latestRules);
     const fmtId = result.format?.id ?? null;
-    setDetectedFormatId(fmtId);
     setDetectedFormatName(result.format?.name ?? "不明（汎用パーサー）");
 
     if (fmtId && CARD_FORMAT_IDS.includes(fmtId)) {
@@ -98,7 +96,8 @@ export default function ImportPage() {
       }))
     );
     setImported(false);
-    e.target.value = "";
+    if (fileRef.current) fileRef.current.value = "";
+    });
   }
 
   function updateRow(i: number, field: Partial<RowState>) {
@@ -116,19 +115,16 @@ export default function ImportPage() {
   }
 
   async function handleImport() {
+    await run(async () => {
     const selected = rows.filter((r) => r.selected && r.account_id);
     const counterIdNum = parseInt(counterAccountId);
     if (!counterIdNum) return;
 
-    // 辞書に追加
-    let savedRules = 0;
-    for (const row of selected) {
-      if (row.save_rule && row.keyword.trim()) {
-        await upsertRule(row.keyword.trim(), parseInt(row.account_id), row.type);
-        savedRules++;
-      }
-    }
-
+    if (rows.some((row) => row.selected && !row.account_id)) throw new Error("選択した明細の勘定科目をすべて指定してください");
+    if (selected.some((row) => Number(row.account_id) === counterIdNum)) throw new Error("相手科目とカウンター勘定には異なる科目を指定してください");
+    const ruleInputs = selected.filter((row) => row.save_rule && row.keyword.trim()).map((row) => ({
+      keyword: row.keyword.trim(), account_id: Number(row.account_id), entry_type: row.type,
+    }));
     await bulkCreateJournalEntries(
       selected.map((row) => {
         const accountId = parseInt(row.account_id);
@@ -151,14 +147,14 @@ export default function ImportPage() {
             },
           ],
         };
-      })
+      }),
+      ruleInputs
     );
-
-    await loadRules();
     setImportedCount(selected.length);
-    setNewRuleCount(savedRules);
+    setNewRuleCount(ruleInputs.length);
     setImported(true);
     setRows([]);
+    });
   }
 
   const selectedCount = rows.filter((r) => r.selected && r.account_id).length;
@@ -166,6 +162,8 @@ export default function ImportPage() {
 
   return (
     <div className="p-6">
+      {loadError && <p role="alert" className="text-destructive text-sm mb-4">{loadError}</p>}
+      <fieldset disabled={pending || !!loadError} className="min-w-0">
       <div className="flex items-center justify-between mb-6">
         <h2 className="text-xl font-semibold">CSVインポート</h2>
         <Link href="/dictionary">
@@ -335,6 +333,7 @@ export default function ImportPage() {
           </Button>
         </>
       )}
+      </fieldset>
     </div>
   );
 }

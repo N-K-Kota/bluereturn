@@ -1,3 +1,5 @@
+import { normalizeDate } from "../validation";
+
 export interface BankFormat {
   id: string;
   name: string;
@@ -10,18 +12,17 @@ export interface BankFormat {
   } | null;
 }
 
-function parseDate(s: string): string {
-  // YYYY/MM/DD or YYYY-MM-DD or YYYYMMDD → YYYY-MM-DD
-  const cleaned = s.replace(/\//g, "-").replace(/\./g, "-");
-  if (/^\d{8}$/.test(cleaned)) {
-    return `${cleaned.slice(0, 4)}-${cleaned.slice(4, 6)}-${cleaned.slice(6, 8)}`;
-  }
-  return cleaned;
+function parseDate(value: string): string {
+  return value?.trim() ? normalizeDate(value) : "";
 }
 
-function parseAmount(s: string): number {
-  if (!s || s.trim() === "") return 0;
-  return parseFloat(s.replace(/,/g, "").replace(/￥/g, "").trim()) || 0;
+export function parseAmount(value: string): number {
+  const cleaned = (value ?? "").replace(/[,￥¥\s]/g, "");
+  if (!cleaned || cleaned === "-") return 0;
+  if (!/^-?\d+$/.test(cleaned)) throw new Error(`金額が正しくありません: ${value}`);
+  const amount = Number(cleaned);
+  if (!Number.isSafeInteger(amount)) throw new Error("金額が大きすぎます");
+  return amount;
 }
 
 export const BANK_FORMATS: BankFormat[] = [
@@ -108,9 +109,19 @@ export const BANK_FORMATS: BankFormat[] = [
   },
 ];
 
+const REQUIRED_HEADERS: Record<string, string[]> = {
+  mufg: ["取引日", "支払い金額", "預かり金額"],
+  mizuho: ["日付", "お引出金額", "お預入金額", "お取引内容"],
+  smbc: ["年月日", "お支払金額（円）", "お預り金額（円）"],
+  rakuten_bank: ["取引日", "入出金種別", "入出金額（円）"],
+  gmo_aozora: ["取引日", "出金金額（円）", "入金金額（円）"],
+  rakuten_card: ["利用日", "利用店名・商品名", "利用金額"],
+  smbc_card: ["ご利用日", "ご利用店名", "ご本人様のご利用金額（円）"],
+};
+
 export function detectFormat(headers: string[]): BankFormat | null {
   for (const fmt of BANK_FORMATS) {
-    const required = fmt.headers.slice(0, 3);
+    const required = REQUIRED_HEADERS[fmt.id];
     if (required.every((h) => headers.includes(h))) {
       return fmt;
     }

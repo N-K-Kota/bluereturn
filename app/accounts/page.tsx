@@ -1,6 +1,9 @@
 "use client";
+import { useAsyncData } from "@/hooks/use-async-data";
+import { useAsyncAction } from "@/hooks/use-async-action";
+import { LoadStatus } from "@/components/LoadStatus";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -28,7 +31,7 @@ import {
   DialogFooter,
 } from "@/components/ui/dialog";
 import { listAccounts, createAccount, deleteAccount } from "@/lib/db/accounts";
-import type { Account, AccountType, AccountSubtype } from "@/types";
+import type { AccountType, AccountSubtype } from "@/types";
 import { Plus, Trash2 } from "lucide-react";
 
 const TYPE_LABELS: Record<AccountType, string> = {
@@ -53,35 +56,37 @@ const SUBTYPE_OPTIONS: Array<{ value: AccountSubtype; label: string; type: Accou
 ];
 
 export default function AccountsPage() {
-  const [accounts, setAccounts] = useState<Account[]>([]);
+  const { data, loading, error, reload: load } = useAsyncData(listAccounts);
+  const accounts = data ?? [];
+  const { run, pending } = useAsyncAction();
   const [open, setOpen] = useState(false);
   const [form, setForm] = useState({ code: "", name: "", type: "expense" as AccountType, subtype: "selling_expense" as AccountSubtype });
   const [deleteId, setDeleteId] = useState<number | null>(null);
 
-  async function load() {
-    setAccounts(await listAccounts());
-  }
-
-  useEffect(() => { load(); }, []);
 
   async function handleCreate() {
+    await run(async () => {
     await createAccount(form);
     setOpen(false);
     setForm({ code: "", name: "", type: "expense", subtype: "selling_expense" });
     load();
+    });
   }
 
   async function handleDelete() {
+    await run(async () => {
     if (deleteId == null) return;
     await deleteAccount(deleteId);
     setDeleteId(null);
     load();
+    });
   }
 
   const subtypes = SUBTYPE_OPTIONS.filter((s) => s.type === form.type);
 
   return (
     <div className="p-6">
+      <LoadStatus loading={loading} error={error} retry={load} />
       <div className="flex items-center justify-between mb-4">
         <h2 className="text-xl font-semibold">勘定科目</h2>
         <Button size="sm" onClick={() => setOpen(true)}>
@@ -172,7 +177,7 @@ export default function AccountsPage() {
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setOpen(false)}>キャンセル</Button>
-            <Button onClick={handleCreate} disabled={!form.code || !form.name}>追加</Button>
+            <Button onClick={handleCreate} disabled={pending || !form.code.trim() || !form.name.trim()}>追加</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
@@ -182,7 +187,7 @@ export default function AccountsPage() {
           <DialogHeader><DialogTitle>勘定科目を削除しますか？</DialogTitle></DialogHeader>
           <DialogFooter>
             <Button variant="outline" onClick={() => setDeleteId(null)}>キャンセル</Button>
-            <Button variant="destructive" onClick={handleDelete}>削除</Button>
+            <Button variant="destructive" onClick={handleDelete} disabled={pending}>削除</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

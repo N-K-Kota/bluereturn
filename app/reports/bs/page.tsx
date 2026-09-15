@@ -1,6 +1,9 @@
 "use client";
+import { useAsyncData } from "@/hooks/use-async-data";
+import { localDate } from "@/lib/validation";
+import { LoadStatus } from "@/components/LoadStatus";
 
-import { useEffect, useState } from "react";
+import { useCallback, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -12,7 +15,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { getBSReport } from "@/lib/db/reports";
-import type { BSReport, BSItem } from "@/types";
+import type { BSItem } from "@/types";
 
 function fmt(n: number) {
   return n.toLocaleString("ja-JP") + " 円";
@@ -49,15 +52,13 @@ function TotalRow({ label, amount }: { label: string; amount: number }) {
 
 export default function BSPage() {
   const year = new Date().getFullYear();
-  const [asOf, setAsOf] = useState(() => new Date().toISOString().slice(0, 10));
+  const [asOf, setAsOf] = useState(() => localDate());
   const [fiscalStart, setFiscalStart] = useState(`${year}-01-01`);
-  const [report, setReport] = useState<BSReport | null>(null);
+  const [range, setRange] = useState({ asOf, fiscalStart });
+  const loader = useCallback(() => getBSReport(range.asOf, range.fiscalStart), [range]);
+  const { data: report, loading, error, reload } = useAsyncData(loader);
+  function load() { setRange({ asOf, fiscalStart }); }
 
-  async function load() {
-    setReport(await getBSReport(asOf, fiscalStart));
-  }
-
-  useEffect(() => { load(); }, []);
 
   const balanced = report
     ? Math.abs(report.total_assets - (report.total_liabilities + report.total_equity)) < 1
@@ -76,6 +77,7 @@ export default function BSPage() {
         </div>
       </div>
 
+      <LoadStatus loading={loading} error={error} retry={reload} />
       {report && (
         <>
           {!balanced && (

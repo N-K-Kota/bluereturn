@@ -16,12 +16,13 @@ export async function upsertRule(
   account_id: number,
   entry_type: "debit" | "credit"
 ): Promise<void> {
+  if (!keyword.trim()) throw new Error("キーワードを入力してください");
   const db = await getDb();
   await db.execute(
     `INSERT INTO import_rules (keyword, account_id, entry_type)
      VALUES (?, ?, ?)
      ON CONFLICT(keyword) DO UPDATE SET account_id = excluded.account_id, entry_type = excluded.entry_type`,
-    [keyword.toLowerCase(), account_id, entry_type]
+    [keyword.trim().toLowerCase(), account_id, entry_type]
   );
 }
 
@@ -30,10 +31,9 @@ export async function deleteRule(id: number): Promise<void> {
   await db.execute("DELETE FROM import_rules WHERE id = ?", [id]);
 }
 
-export async function matchRule(
-  description: string,
-  rules: ImportRule[]
-): Promise<ImportRule | null> {
-  const lower = description.toLowerCase();
-  return rules.find((r) => lower.includes(r.keyword.toLowerCase())) ?? null;
+export async function updateRule(id: number, keyword: string, accountId: number, entryType: "debit" | "credit"): Promise<void> {
+  if (!keyword.trim()) throw new Error("キーワードを入力してください");
+  const db = await getDb();
+  await db.execute("UPDATE import_rules SET keyword = ?, account_id = ?, entry_type = ? WHERE id = ?",
+    [keyword.trim().toLowerCase(), accountId, entryType, id]);
 }

@@ -1,9 +1,10 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { getPLReport } from "@/lib/db/reports";
-import type { PLReport } from "@/types";
+import { useAsyncData } from "@/hooks/use-async-data";
+import { LoadStatus } from "@/components/LoadStatus";
 
 function fmt(n: number) {
   return n.toLocaleString("ja-JP") + " 円";
@@ -16,14 +17,10 @@ function currentFiscalYear() {
 }
 
 export default function DashboardPage() {
-  const [report, setReport] = useState<PLReport | null>(null);
   const { start, end } = currentFiscalYear();
 
-  useEffect(() => {
-    getPLReport(start, end)
-      .then(setReport)
-      .catch(() => {});
-  }, [start, end]);
+  const loader = useCallback(() => getPLReport(start, end), [start, end]);
+  const { data: report, loading, error, reload } = useAsyncData(loader);
 
   const cards = report
     ? [
@@ -45,7 +42,8 @@ export default function DashboardPage() {
         </p>
       </div>
 
-      {report ? (
+      <LoadStatus loading={loading} error={error} retry={reload} />
+      {report && (
         <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
           {cards.map(({ label, value }) => (
             <Card key={label}>
@@ -62,8 +60,6 @@ export default function DashboardPage() {
             </Card>
           ))}
         </div>
-      ) : (
-        <p className="text-muted-foreground text-sm">読み込み中...</p>
       )}
     </div>
   );

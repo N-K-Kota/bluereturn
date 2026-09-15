@@ -1,0 +1,10 @@
+# Accounting changes benefit from careful reasoning; keep model selection in the app.
+model_reasoning_effort = "high"
+
+# Verify tax rules and version-specific documentation against current sources.
+web_search = "live"
+
+# Development servers, package registries and local HTTP checks need networking.
+# Filesystem writes remain limited by workspace-write and protected-path rules.
+[sandbox_workspace_write]
+network_access = true

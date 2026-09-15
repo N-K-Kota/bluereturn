@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -14,7 +14,10 @@ import {
 } from "@/components/ui/select";
 import { listAccounts } from "@/lib/db/accounts";
 import { createJournalEntry } from "@/lib/db/journal";
-import type { Account } from "@/types";
+import { useAsyncData } from "@/hooks/use-async-data";
+import { useAsyncAction } from "@/hooks/use-async-action";
+import { localDate, errorMessage } from "@/lib/validation";
+import { LoadStatus } from "@/components/LoadStatus";
 import { Plus, Trash2 } from "lucide-react";
 
 interface Line {
@@ -30,19 +33,17 @@ function emptyLine(): Line {
 
 export default function NewJournalPage() {
   const router = useRouter();
-  const [accounts, setAccounts] = useState<Account[]>([]);
-  const [date, setDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const { data, loading, error: loadError, reload } = useAsyncData(listAccounts);
+  const accounts = data ?? [];
+  const { run, pending } = useAsyncAction();
+  const [date, setDate] = useState(() => localDate());
   const [description, setDescription] = useState("");
   const [lines, setLines] = useState<Line[]>([emptyLine(), emptyLine()]);
   const [error, setError] = useState("");
 
-  useEffect(() => {
-    listAccounts().then(setAccounts);
-  }, []);
-
-  const totalDebit = lines.reduce((s, l) => s + (parseFloat(l.debit_amount) || 0), 0);
-  const totalCredit = lines.reduce((s, l) => s + (parseFloat(l.credit_amount) || 0), 0);
-  const balanced = Math.abs(totalDebit - totalCredit) < 0.01;
+  const totalDebit = lines.reduce((s, l) => s + (Number(l.debit_amount)), 0);
+  const totalCredit = lines.reduce((s, l) => s + (Number(l.credit_amount)), 0);
+  const balanced = totalDebit === totalCredit && totalDebit > 0;
 
   function updateLine(i: number, field: keyof Line, value: string) {
     setLines((prev) => prev.map((l, idx) => (idx === i ? { ...l, [field]: value } : l)));
@@ -50,29 +51,33 @@ export default function NewJournalPage() {
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
+    await run(async () => {
     setError("");
-    const validLines = lines.filter((l) => l.account_id);
+    const validLines = lines.filter((l) => l.account_id || l.debit_amount || l.credit_amount || l.description);
     try {
       await createJournalEntry({
         date,
         description,
         lines: validLines.map((l) => ({
           account_id: parseInt(l.account_id),
-          debit_amount: parseFloat(l.debit_amount) || 0,
-          credit_amount: parseFloat(l.credit_amount) || 0,
+          debit_amount: Number(l.debit_amount),
+          credit_amount: Number(l.credit_amount),
           description: l.description,
         })),
       });
       router.push("/journal");
     } catch (e) {
-      setError(e instanceof Error ? e.message : "保存に失敗しました");
+      setError(errorMessage(e));
     }
+    });
   }
 
   return (
     <div className="p-6 max-w-3xl">
       <h2 className="text-xl font-semibold mb-6">仕訳入力</h2>
-      <form onSubmit={handleSubmit} className="space-y-4">
+      <LoadStatus loading={loading} error={loadError} retry={reload} />
+      <form onSubmit={handleSubmit}>
+      <fieldset disabled={pending || loading || !!loadError} className="space-y-4">
         <div className="flex gap-4">
           <div className="w-48">
             <Label>日付</Label>
@@ -182,13 +187,14 @@ export default function NewJournalPage() {
         {error && <p className="text-destructive text-sm">{error}</p>}
 
         <div className="flex gap-2">
-          <Button type="submit" disabled={!balanced}>
+          <Button type="submit" disabled={!balanced || pending || loading || !!loadError}>
             保存
           </Button>
           <Button type="button" variant="outline" onClick={() => router.back()}>
             キャンセル
           </Button>
         </div>
+      </fieldset>
       </form>
     </div>
   );

@@ -1,6 +1,9 @@
 "use client";
+import { useAsyncData } from "@/hooks/use-async-data";
+import { useAsyncAction } from "@/hooks/use-async-action";
+import { LoadStatus } from "@/components/LoadStatus";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -20,14 +23,21 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { listRules, upsertRule, deleteRule } from "@/lib/db/rules";
+import { listRules, upsertRule, deleteRule, updateRule } from "@/lib/db/rules";
 import { listAccounts } from "@/lib/db/accounts";
-import type { ImportRule, Account } from "@/types";
+import type { ImportRule } from "@/types";
 import { Plus, Trash2, Pencil, Check, X } from "lucide-react";
 
+async function loadDictionary() {
+  const [rules, accounts] = await Promise.all([listRules(), listAccounts()]);
+  return { rules, accounts };
+}
+
 export default function DictionaryPage() {
-  const [rules, setRules] = useState<ImportRule[]>([]);
-  const [accounts, setAccounts] = useState<Account[]>([]);
+  const { data, loading, error, reload: load } = useAsyncData(loadDictionary);
+  const rules = data?.rules ?? [];
+  const accounts = data?.accounts ?? [];
+  const { run, pending } = useAsyncAction();
   const [search, setSearch] = useState("");
   const [editId, setEditId] = useState<number | null>(null);
   const [editKeyword, setEditKeyword] = useState("");
@@ -39,21 +49,15 @@ export default function DictionaryPage() {
   const [newAccountId, setNewAccountId] = useState("");
   const [newType, setNewType] = useState<"debit" | "credit">("debit");
 
-  async function load() {
-    const [r, a] = await Promise.all([listRules(), listAccounts()]);
-    setRules(r);
-    setAccounts(a);
-  }
-
-  useEffect(() => { load(); }, []);
-
   async function handleAdd() {
+    await run(async () => {
     if (!newKeyword.trim() || !newAccountId) return;
     await upsertRule(newKeyword.trim(), parseInt(newAccountId), newType);
     setNewKeyword("");
     setNewAccountId("");
     setNewType("debit");
     load();
+    });
   }
 
   function startEdit(rule: ImportRule) {
@@ -64,17 +68,19 @@ export default function DictionaryPage() {
   }
 
   async function handleEditSave() {
+    await run(async () => {
     if (!editKeyword.trim() || !editAccountId || editId == null) return;
-    // 既存ルールを削除して新しいキーワードで保存
-    await deleteRule(editId);
-    await upsertRule(editKeyword.trim(), parseInt(editAccountId), editType);
+    await updateRule(editId, editKeyword.trim(), parseInt(editAccountId), editType);
     setEditId(null);
     load();
+    });
   }
 
   async function handleDelete(id: number) {
+    await run(async () => {
     await deleteRule(id);
     load();
+    });
   }
 
   const filtered = rules.filter(
@@ -84,7 +90,8 @@ export default function DictionaryPage() {
   );
 
   return (
-    <div className="p-6 max-w-3xl">
+    <div className="p-6 max-w-3xl" aria-busy={pending}>
+      <LoadStatus loading={loading} error={error} retry={load} />
       <div className="mb-6">
         <h2 className="text-xl font-semibold">勘定科目辞書</h2>
         <p className="text-sm text-muted-foreground mt-1">
@@ -132,7 +139,7 @@ export default function DictionaryPage() {
           <Button
             size="sm"
             onClick={handleAdd}
-            disabled={!newKeyword.trim() || !newAccountId}
+            disabled={pending || !newKeyword.trim() || !newAccountId}
           >
             <Plus size={14} className="mr-1" />
             追加
